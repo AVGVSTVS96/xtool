@@ -1,0 +1,4 @@
+{
+  "upstream": "xtool-org/xtool",
+  "follow": "releases"
+}
