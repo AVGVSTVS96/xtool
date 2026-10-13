@@ -22,6 +22,7 @@ extension ProvisioningIdentifiers {
     }
 
     static func identifier(fromSanitized sanitized: String, context: SigningContext) -> String {
+        if ProcessInfo.processInfo.environment["XTL_KEEP_IDENTIFIERS"] == "1" { return sanitized }
         let uuid = context.auth.identityID.split(separator: "-")[0].uppercased()
         return "\(Self.idPrefix)\(uuid).\(sanitized)"
     }

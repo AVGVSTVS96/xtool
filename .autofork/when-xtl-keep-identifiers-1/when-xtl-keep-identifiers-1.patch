@@ -1,0 +1,12 @@
+diff --git a/Sources/XKit/Utilities/ProvisioningIdentifiers.swift b/Sources/XKit/Utilities/ProvisioningIdentifiers.swift
+index 7f180a9379e23da28ed3273119725aaa09927a91..69fa1c2afd203d24bbb377e911c7e364c3a3cd03 100644
+--- a/Sources/XKit/Utilities/ProvisioningIdentifiers.swift
++++ b/Sources/XKit/Utilities/ProvisioningIdentifiers.swift
+@@ -22,6 +22,7 @@ extension ProvisioningIdentifiers {
+     }
+ 
+     static func identifier(fromSanitized sanitized: String, context: SigningContext) -> String {
++        if ProcessInfo.processInfo.environment["XTL_KEEP_IDENTIFIERS"] == "1" { return sanitized }
+         let uuid = context.auth.identityID.split(separator: "-")[0].uppercased()
+         return "\(Self.idPrefix)\(uuid).\(sanitized)"
+     }

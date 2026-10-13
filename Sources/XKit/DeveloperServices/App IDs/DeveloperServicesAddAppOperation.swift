@@ -206,7 +206,10 @@ public struct DeveloperServicesAddAppOperation: DeveloperServicesOperation {
         if var entitlementsArray = try? entitlements.entitlements(),
             let groupsIdx = entitlementsArray.firstIndex(where: { $0 is AppGroupEntitlement }),
             let groupsEntitlement = entitlementsArray[groupsIdx] as? AppGroupEntitlement {
-            let groups = groupsEntitlement.rawValue
+            // free teams can only assign one group per app
+            let groups = isFreeTeam
+                ? Array(groupsEntitlement.rawValue.prefix(1))
+                : groupsEntitlement.rawValue
 
             if let operation = DeveloperServicesAssignAppGroupsOperation(
                 context: self.context,

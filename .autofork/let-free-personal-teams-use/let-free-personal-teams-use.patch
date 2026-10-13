@@ -1,0 +1,31 @@
+diff --git a/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift b/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift
+index d726e91eaddaed567950fccfd1b94e0ef2ebb8ca..2a6049263a4be6294eb1a65c2eb00e95769bd3a3 100644
+--- a/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift	
++++ b/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift	
+@@ -206,7 +206,10 @@ public struct DeveloperServicesAddAppOperation: DeveloperServicesOperation {
+         if var entitlementsArray = try? entitlements.entitlements(),
+             let groupsIdx = entitlementsArray.firstIndex(where: { $0 is AppGroupEntitlement }),
+             let groupsEntitlement = entitlementsArray[groupsIdx] as? AppGroupEntitlement {
+-            let groups = groupsEntitlement.rawValue
++            // free teams can only assign one group per app
++            let groups = isFreeTeam
++                ? Array(groupsEntitlement.rawValue.prefix(1))
++                : groupsEntitlement.rawValue
+ 
+             if let operation = DeveloperServicesAssignAppGroupsOperation(
+                 context: self.context,
+diff --git a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift
+index 2dca463757a5fb77d8549743e75c67941206cd08..9af5eb6531d70faf2a09eb71f36bd718859a21b9 100644
+--- a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
++++ b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
+@@ -73,9 +73,7 @@ extension DataProtectionEntitlement: EntitlementWithCapability {
+ 
+ extension AppGroupEntitlement: EntitlementWithCapability {
+     var capability: DeveloperServicesCapability {
+-        // FIXME: Enable app groups on free accounts
+-        // but we need to always assign only one group
+-        DeveloperServicesCapability(.appGroups, isFree: false)
++        DeveloperServicesCapability(.appGroups, isFree: true)
+     }
+ }
+ 
