@@ -22,7 +22,6 @@ extension ProvisioningIdentifiers {
     }
 
     static func identifier(fromSanitized sanitized: String, context: SigningContext) -> String {
-        if ProcessInfo.processInfo.environment["XTL_KEEP_IDENTIFIERS"] == "1" { return sanitized }
         let uuid = context.auth.identityID.split(separator: "-")[0].uppercased()
         return "\(Self.idPrefix)\(uuid).\(sanitized)"
     }
@@ -39,6 +38,10 @@ extension ProvisioningIdentifiers {
 
     static func groupID(fromSanitized sanitized: String, context: SigningContext) -> DeveloperServicesAppGroup.GroupID {
         .init(rawValue: "\(Self.groupPrefix)\(identifier(fromSanitized: sanitized, context: context))")
+    }
+
+    static func ownGroupID(fromSanitized sanitized: String) -> DeveloperServicesAppGroup.GroupID {
+        .init(rawValue: "\(Self.groupPrefix)\(sanitized)")
     }
 
     static func groupName(fromSanitized sanitized: String) -> String {

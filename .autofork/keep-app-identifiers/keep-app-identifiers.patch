@@ -1,0 +1,239 @@
+diff --git a/Sources/XKit/DeveloperServices/App Groups/DeveloperServicesAssignAppGroupsOperation.swift b/Sources/XKit/DeveloperServices/App Groups/DeveloperServicesAssignAppGroupsOperation.swift
+index b13e1a5b06557751fafc538f2c4691ac6e5c2ffd..6ff7316ccccf48f03322edaa874b4c419cb24695 100644
+--- a/Sources/XKit/DeveloperServices/App Groups/DeveloperServicesAssignAppGroupsOperation.swift	
++++ b/Sources/XKit/DeveloperServices/App Groups/DeveloperServicesAssignAppGroupsOperation.swift	
+@@ -35,22 +35,23 @@ public struct DeveloperServicesAssignAppGroupsOperation: DeveloperServicesOperat
+ 
+     private func upsertAppGroup(
+         _ groupID: DeveloperServicesAppGroup.GroupID,
+-        existingGroups: [String: DeveloperServicesAppGroup]
++        existingGroups: [DeveloperServicesAppGroup]
+     ) async throws -> DeveloperServicesAppGroup.GroupID {
+         let sanitized = ProvisioningIdentifiers.sanitize(groupID: groupID)
++        let ownID = ProvisioningIdentifiers.ownGroupID(fromSanitized: sanitized)
++        let prefixedID = ProvisioningIdentifiers.groupID(fromSanitized: sanitized, context: context)
+         let group: DeveloperServicesAppGroup
+-        if let existingGroup = existingGroups[sanitized] {
++        if let existingGroup = existingGroups.first(where: { $0.groupID == ownID })
++            ?? existingGroups.first(where: { $0.groupID == prefixedID }) {
+             group = existingGroup
+         } else {
+-            let groupID = ProvisioningIdentifiers.groupID(fromSanitized: sanitized, context: context)
+             let name = ProvisioningIdentifiers.groupName(fromSanitized: sanitized)
+-            let request = DeveloperServicesAddAppGroupRequest(
+-                platform: .iOS,
+-                teamID: xcodeAuthData.teamID,
+-                name: name,
+-                groupID: groupID
+-            )
+-            group = try await client.send(request)
++            do {
++                group = try await addAppGroup(ownID, name: name)
++            } catch let error as DeveloperServicesAPIVersionLegacy.Error where error.code == 35 {
++                // 35 is Apple's catch-all for an invalid group ID, including one another team owns
++                group = try await addAppGroup(prefixedID, name: name)
++            }
+         }
+ 
+         _ = try await client.send(
+@@ -65,16 +66,26 @@ public struct DeveloperServicesAssignAppGroupsOperation: DeveloperServicesOperat
+         return group.groupID
+     }
+ 
++    private func addAppGroup(
++        _ groupID: DeveloperServicesAppGroup.GroupID,
++        name: String
++    ) async throws -> DeveloperServicesAppGroup {
++        try await client.send(DeveloperServicesAddAppGroupRequest(
++            platform: .iOS,
++            teamID: xcodeAuthData.teamID,
++            name: name,
++            groupID: groupID
++        ))
++    }
++
+     public func perform() async throws -> [DeveloperServicesAppGroup.GroupID] {
+         let existing = try await client.send(DeveloperServicesListAppGroupsRequest(
+             platform: .iOS, teamID: xcodeAuthData.teamID
+         ))
+-        let sanitized = existing.map { (ProvisioningIdentifiers.sanitize(groupID: $0.groupID), $0) }
+-        let dict = Dictionary(sanitized, uniquingKeysWith: { $1 })
+         return try await withThrowingTaskGroup(of: DeveloperServicesAppGroup.GroupID.self) { group in
+             for groupID in groupIDs {
+                 group.addTask {
+-                    try await upsertAppGroup(groupID, existingGroups: dict)
++                    try await upsertAppGroup(groupID, existingGroups: existing)
+                 }
+             }
+             return try await group.reduce(into: []) { $0.append($1) }
+diff --git a/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift b/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift
+index d726e91eaddaed567950fccfd1b94e0ef2ebb8ca..3d311ec4553d8308f5d5aacba4e0e7eaaaab9f87 100644
+--- a/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift	
++++ b/Sources/XKit/DeveloperServices/App IDs/DeveloperServicesAddAppOperation.swift	
+@@ -37,42 +37,37 @@ public struct DeveloperServicesAddAppOperation: DeveloperServicesOperation {
+         self.root = root
+     }
+ 
+-    /// Registers the app with the given entitlements
++    /// Registers the app with the given entitlements, under the first of `identifiers`
++    /// that the team already has, or else the first one it can register
+     private func upsertApp(
+         bundleID: String,
++        identifiers: [String],
+         entitlements: Entitlements,
+         isFreeTeam: Bool
+     ) async throws -> Components.Schemas.BundleId {
+-        let newBundleID = ProvisioningIdentifiers.identifier(fromSanitized: bundleID, context: self.context)
+-
+         let existing = try await context.developerAPIClient
+             .bundleIdsGetCollection(query: .init(
+-                filter_lbrack_identifier_rbrack_: [bundleID]
++                filter_lbrack_identifier_rbrack_: identifiers
+             ))
+             .ok.body.json.data
+-            // filter[identifier] is a prefix filter so we need to manually upgrade to equality
+-            .first(where: { $0.attributes?.identifier == newBundleID })
++
++        // filter[identifier] is a prefix filter so we need to manually upgrade to equality
++        let match = identifiers.lazy
++            .compactMap { id in existing.first { $0.attributes?.identifier == id } }
++            .first
+ 
+         let appID: Components.Schemas.BundleId
+-        if let existing {
+-            appID = existing
++        if let match {
++            appID = match
+         } else {
+             let name = ProvisioningIdentifiers.appName(fromSanitized: bundleID)
+-            let createResponse = try await context.developerAPIClient.bundleIdsCreateInstance(
+-                body: .json(
+-                    .init(
+-                        data: .init(
+-                            _type: .bundleIds,
+-                            attributes: .init(
+-                                name: name,
+-                                platform: .init(.ios),
+-                                identifier: newBundleID
+-                            )
+-                        )
+-                    )
+-                )
+-            )
+-            appID = try createResponse.created.body.json.data
++            var response = try await registerApp(identifier: identifiers[0], name: name)
++            // App IDs are unique across all teams, so a conflict means another team owns this one
++            for identifier in identifiers.dropFirst() {
++                guard case .conflict = response else { break }
++                response = try await registerApp(identifier: identifier, name: name)
++            }
++            appID = try response.created.body.json.data
+         }
+ 
+         let existingCapabilitiesList = try await context.developerAPIClient
+@@ -153,12 +148,33 @@ public struct DeveloperServicesAddAppOperation: DeveloperServicesOperation {
+         return appID
+     }
+ 
++    private func registerApp(
++        identifier: String,
++        name: String
++    ) async throws -> Operations.BundleIdsCreateInstance.Output {
++        try await context.developerAPIClient.bundleIdsCreateInstance(
++            body: .json(
++                .init(
++                    data: .init(
++                        _type: .bundleIds,
++                        attributes: .init(
++                            name: name,
++                            platform: .init(.ios),
++                            identifier: identifier
++                        )
++                    )
++                )
++            )
++        )
++    }
++
+     /// Registers the app and creates a profile. Returns the resultant entitlements as well as
+     /// the profile (note that the profile does not necessarily include all of the entitlements
+     /// that the app has).
+     private func addApp(
+         _ app: URL,
+-        isFreeTeam: Bool
++        isFreeTeam: Bool,
++        identifiers: (String) -> [String]
+     ) async throws -> ProvisioningInfo {
+         let infoURL = app.appendingPathComponent("Info.plist")
+         guard let data = try? Data(contentsOf: infoURL),
+@@ -186,7 +202,12 @@ public struct DeveloperServicesAddAppOperation: DeveloperServicesOperation {
+             entitlements = try Entitlements(entitlements: [])
+         }
+ 
+-        let appID = try await upsertApp(bundleID: bundleID, entitlements: entitlements, isFreeTeam: isFreeTeam)
++        let appID = try await upsertApp(
++            bundleID: bundleID,
++            identifiers: identifiers(bundleID),
++            entitlements: entitlements,
++            isFreeTeam: isFreeTeam
++        )
+         let newBundleID = appID.attributes!.identifier!
+ 
+         let teamID = try signingInfo.certificate.teamID()
+@@ -234,27 +255,34 @@ public struct DeveloperServicesAddAppOperation: DeveloperServicesOperation {
+ 
+     /// Registers the app + its extensions, returning the profile and entitlements of each
+     public func perform() async throws -> [URL: ProvisioningInfo] {
+-        var apps: [URL] = [root]
++        let isFreeTeam = try await context.auth.team()?.isFree == true
++        let prefixed: @Sendable (String) -> String = { ProvisioningIdentifiers.identifier(fromSanitized: $0, context: context) }
++
++        // The app keeps its own ID unless another team owns it, and its extensions
++        // follow, since iOS requires an extension's ID to start with its app's.
++        let rootInfo = try await addApp(root, isFreeTeam: isFreeTeam) { [$0, prefixed($0)] }
++        let keepsIdentifiers = !rootInfo.newBundleID.hasPrefix(ProvisioningIdentifiers.idPrefix)
+ 
++        var extensions: [URL] = []
+         for pluginsDir in ["PlugIns", "Extensions"] {
+             let plugins = root.appendingPathComponent(pluginsDir)
+             guard plugins.dirExists else { continue }
+-            apps += plugins.implicitContents.filter { $0.pathExtension.lowercased() == "appex" }
++            extensions += plugins.implicitContents.filter { $0.pathExtension.lowercased() == "appex" }
+         }
+ 
+-        let isFreeTeam = try await context.auth.team()?.isFree == true
+-
+         return try await withThrowingTaskGroup(
+             of: (URL, ProvisioningInfo).self,
+             returning: [URL: ProvisioningInfo].self
+         ) { group in
+-            for app in apps {
++            for app in extensions {
+                 group.addTask {
+-                    let info = try await addApp(app, isFreeTeam: isFreeTeam)
++                    let info = try await addApp(app, isFreeTeam: isFreeTeam) {
++                        keepsIdentifiers ? [$0] : [prefixed($0)]
++                    }
+                     return (app, info)
+                 }
+             }
+-            return try await group.reduce(into: [:]) { $0[$1.0] = $1.1 }
++            return try await group.reduce(into: [root: rootInfo]) { $0[$1.0] = $1.1 }
+         }
+     }
+ 
+diff --git a/Sources/XKit/Utilities/ProvisioningIdentifiers.swift b/Sources/XKit/Utilities/ProvisioningIdentifiers.swift
+index 7f180a9379e23da28ed3273119725aaa09927a91..44475292efba24dca629bf5ee3314c3958cbb19a 100644
+--- a/Sources/XKit/Utilities/ProvisioningIdentifiers.swift
++++ b/Sources/XKit/Utilities/ProvisioningIdentifiers.swift
+@@ -40,6 +40,10 @@ extension ProvisioningIdentifiers {
+         .init(rawValue: "\(Self.groupPrefix)\(identifier(fromSanitized: sanitized, context: context))")
+     }
+ 
++    static func ownGroupID(fromSanitized sanitized: String) -> DeveloperServicesAppGroup.GroupID {
++        .init(rawValue: "\(Self.groupPrefix)\(sanitized)")
++    }
++
+     static func groupName(fromSanitized sanitized: String) -> String {
+         "\(Self.namePrefix)group \(safeify(identifier: sanitized))"
+     }
