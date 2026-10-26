@@ -15,7 +15,7 @@ index 3d311ec4553d8308f5d5aacba4e0e7eaaaab9f87..a19d362ac2785a5802006b3a069f1fcf
              if let operation = DeveloperServicesAssignAppGroupsOperation(
                  context: self.context,
 diff --git a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift
-index 2dca463757a5fb77d8549743e75c67941206cd08..9af5eb6531d70faf2a09eb71f36bd718859a21b9 100644
+index 1d122548277e230dfbc18dac043cd5fc504fe3fb..05aad3800369c576f15b44df2e3e91c26eb3202e 100644
 --- a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
 +++ b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
 @@ -73,9 +73,7 @@ extension DataProtectionEntitlement: EntitlementWithCapability {
