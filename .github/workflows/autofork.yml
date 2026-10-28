@@ -30,7 +30,3 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
-
-      - name: Capture Claude accounting
-        if: always()
-        uses: AVGVSTVS96/autofork/.github/actions/usage@bf88ce65d7096d600ebe31ea4e607260ba1b9826
