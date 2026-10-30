@@ -1,0 +1,17 @@
+diff --git a/Sources/PackLib/Packer.swift b/Sources/PackLib/Packer.swift
+index bd2057b77edfbbe2bf47f8fefe7398cfafae9db1..db7e51e0cd25dc51b22e525b554a4c765066db88 100644
+--- a/Sources/PackLib/Packer.swift
++++ b/Sources/PackLib/Packer.swift
+@@ -156,7 +156,11 @@ public struct Packer: Sendable {
+             group.addTask {
+                 switch command {
+                 case .bundle(let package, let target):
+-                    try await packFile(srcName: "\(package)_\(target).bundle")
++                    let name = "\(package)_\(target).bundle"
++                    // the planner lists every target in the dependency graph, including ones a package
++                    // trait or platform condition leaves out of the build, which make no bundle.
++                    guard FileManager.default.fileExists(atPath: binDir.appendingPathComponent(name).path) else { break }
++                    try await packFile(srcName: name)
+                 case .binaryTarget(let name):
+                     let src = URL(fileURLWithPath: "\(name).framework/\(name)", relativeTo: binDir)
+                     let magic = Data("!<arch>\n".utf8)

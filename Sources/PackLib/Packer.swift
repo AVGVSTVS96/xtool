@@ -163,7 +163,11 @@ public struct Packer: Sendable {
             group.addTask {
                 switch command {
                 case .bundle(let package, let target):
-                    try await packFile(srcName: "\(package)_\(target).bundle")
+                    let name = "\(package)_\(target).bundle"
+                    // the planner lists every target in the dependency graph, including ones a package
+                    // trait or platform condition leaves out of the build, which make no bundle.
+                    guard FileManager.default.fileExists(atPath: binDir.appendingPathComponent(name).path) else { break }
+                    try await packFile(srcName: name)
                 case .binaryTarget(let name):
                     let src = URL(fileURLWithPath: "\(name).framework/\(name)", relativeTo: binDir)
                     let magic = Data("!<arch>\n".utf8)
