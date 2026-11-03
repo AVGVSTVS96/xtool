@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: AVGVSTVS96/autofork@v1
+      - uses: AVGVSTVS96/autofork@main
         with:
           codex-auth-url: https://autofork-app.vercel.app/api/chatgpt/auth
         env:
