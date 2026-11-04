@@ -85,9 +85,11 @@ public struct AutoSigner {
         let entitlements = provisioningDict.mapValues(\.entitlements)
 
         status(NSLocalizedString("signer.signing", value: "Signing", comment: ""))
+        // A certificate stored without its key is one whose key lives elsewhere: provision for it, sign ad hoc,
+        // and leave the real signature to whoever holds the key (an Xcode on a Mac, say), so it never gets revoked.
         try await context.signer.sign(
             app: app,
-            identity: .real(signingInfo.certificate, signingInfo.privateKey),
+            identity: signingInfo.privateKey.data.isEmpty ? .adhoc : .real(signingInfo.certificate, signingInfo.privateKey),
             entitlementMapping: entitlements,
             progress: progress
         )
