@@ -111,10 +111,11 @@ struct SDKBuilder {
         func sdk(platform: String, prefix: String) throws -> String {
             let regex = try NSRegularExpression(pattern: #"^\#(prefix)\d+\.\d+\.sdk$"#)
             let dir = dev.appendingPathComponent("Platforms/\(platform).platform/Developer/SDKs")
-            let names = try dir.contents().map(\.lastPathComponent)
-            guard let name = names.first(where: {
+            let names = try dir.contents().map(\.lastPathComponent).filter {
                 regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil
-            }) else {
+            }
+            let version = { (name: String) in name.dropFirst(prefix.count).dropLast(4).split(separator: ".").compactMap { Int($0) } }
+            guard let name = names.max(by: { version($0).lexicographicallyPrecedes(version($1)) }) else {
                 throw Console.Error("Could not find SDK for \(platform)/\(prefix)")
             }
             return name

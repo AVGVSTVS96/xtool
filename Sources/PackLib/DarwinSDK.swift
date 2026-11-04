@@ -21,6 +21,7 @@ public struct DarwinSDK {
             let destination = url.deletingLastPathComponent()
                 .appendingPathComponent("darwin.artifactbundle", isDirectory: true)
             try FileManager.default.moveItem(at: url, to: destination)
+            try DarwinSDK.addLinkerSysroot(to: destination)
         }
 
         deinit {
@@ -95,6 +96,30 @@ public struct DarwinSDK {
             try FileManager.default.removeItem(at: bundle)
         }
         return TemporaryBundle(url: bundle)
+    }
+
+    /// On Linux the Swift driver hands clang `--sysroot`, and clang reads an SDK's version only from `-isysroot`, so
+    /// without it iOS binaries record their deployment target as the SDK they were built with.
+    private static func addLinkerSysroot(to bundle: URL) throws {
+        struct Definition: Decodable {
+            struct Triple: Decodable { let sdkRootPath: String }
+            let targetTriples: [String: Triple]
+        }
+        let definition = try JSONDecoder().decode(
+            Definition.self,
+            from: Data(contentsOf: bundle.appendingPathComponent("swift-sdk.json"))
+        )
+        guard let iOS = definition.targetTriples["arm64-apple-ios"] else { return }
+        let toolsetURL = bundle.appendingPathComponent("toolset-swb.json")
+        guard var toolset = try JSONSerialization.jsonObject(with: Data(contentsOf: toolsetURL)) as? [String: Any] else {
+            throw StringError("Invalid toolset at '\(toolsetURL.path)'")
+        }
+        var compiler = toolset["swiftCompiler"] as? [String: Any] ?? [:]
+        let sysroot = bundle.appendingPathComponent(iOS.sdkRootPath).path
+        compiler["extraCLIOptions"] = (compiler["extraCLIOptions"] as? [String] ?? [])
+            + ["-Xclang-linker", "-isysroot", "-Xclang-linker", sysroot]
+        toolset["swiftCompiler"] = compiler
+        try JSONSerialization.data(withJSONObject: toolset, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: toolsetURL)
     }
 
     private static func addHostClangResourceDir(to sdk: URL) async throws {
