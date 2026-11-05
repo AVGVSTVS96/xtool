@@ -9,7 +9,11 @@ final class XToolAuthDelegate: TwoFactorAuthDelegate {
 }
 
 actor XToolInstallerDelegate: IntegratedInstallerDelegate {
-    init() {}
+    private let revokesCertificates: Bool
+
+    init(revokesCertificates: Bool = true) {
+        self.revokesCertificates = revokesCertificates
+    }
 
     private let updateTask = LockIsolated<Task<Void, Never>?>(nil)
 
@@ -79,6 +83,7 @@ actor XToolInstallerDelegate: IntegratedInstallerDelegate {
     }
 
     func confirmRevocation(of certificates: [DeveloperServicesCertificate]) async -> Bool {
+        guard revokesCertificates else { return false }
         print("\nThe following certificates must be revoked:")
         print(
             certificates.map {
