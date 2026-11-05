@@ -1,0 +1,158 @@
+diff --git a/Sources/PackLib/DarwinSDK.swift b/Sources/PackLib/DarwinSDK.swift
+index cadd72dd3d477d9d53d1de90adf964a4137d41fb..5d221e1f98949b78b6879c0311e97289199375e8 100644
+--- a/Sources/PackLib/DarwinSDK.swift
++++ b/Sources/PackLib/DarwinSDK.swift
+@@ -21,6 +21,7 @@ public struct DarwinSDK {
+             let destination = url.deletingLastPathComponent()
+                 .appendingPathComponent("darwin.artifactbundle", isDirectory: true)
+             try FileManager.default.moveItem(at: url, to: destination)
++            try DarwinSDK.addLinkerSysroot(to: destination)
+         }
+ 
+         deinit {
+@@ -97,6 +98,30 @@ public struct DarwinSDK {
+         return TemporaryBundle(url: bundle)
+     }
+ 
++    /// On Linux the Swift driver hands clang `--sysroot`, and clang reads an SDK's version only from `-isysroot`, so
++    /// without it iOS binaries record their deployment target as the SDK they were built with.
++    private static func addLinkerSysroot(to bundle: URL) throws {
++        struct Definition: Decodable {
++            struct Triple: Decodable { let sdkRootPath: String }
++            let targetTriples: [String: Triple]
++        }
++        let definition = try JSONDecoder().decode(
++            Definition.self,
++            from: Data(contentsOf: bundle.appendingPathComponent("swift-sdk.json"))
++        )
++        guard let iOS = definition.targetTriples["arm64-apple-ios"] else { return }
++        let toolsetURL = bundle.appendingPathComponent("toolset-swb.json")
++        guard var toolset = try JSONSerialization.jsonObject(with: Data(contentsOf: toolsetURL)) as? [String: Any] else {
++            throw StringError("Invalid toolset at '\(toolsetURL.path)'")
++        }
++        var compiler = toolset["swiftCompiler"] as? [String: Any] ?? [:]
++        let sysroot = bundle.appendingPathComponent(iOS.sdkRootPath).path
++        compiler["extraCLIOptions"] = (compiler["extraCLIOptions"] as? [String] ?? [])
++            + ["-Xclang-linker", "-isysroot", "-Xclang-linker", sysroot]
++        toolset["swiftCompiler"] = compiler
++        try JSONSerialization.data(withJSONObject: toolset, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: toolsetURL)
++    }
++
+     private static func addHostClangResourceDir(to sdk: URL) async throws {
+         struct SwiftTargetInfo: Decodable {
+             struct Paths: Decodable {
+diff --git a/Sources/XKit/Signer/AutoSigner.swift b/Sources/XKit/Signer/AutoSigner.swift
+index b19dde8dc3e62e9b4d528651f7ee04acd40a1394..94e190cfeb08ae582ba4a62bfc79b8329913cf72 100644
+--- a/Sources/XKit/Signer/AutoSigner.swift
++++ b/Sources/XKit/Signer/AutoSigner.swift
+@@ -85,9 +85,11 @@ public struct AutoSigner {
+         let entitlements = provisioningDict.mapValues(\.entitlements)
+ 
+         status(NSLocalizedString("signer.signing", value: "Signing", comment: ""))
++        // A certificate stored without its key is one whose key lives elsewhere: provision for it, sign ad hoc,
++        // and leave the real signature to whoever holds the key (an Xcode on a Mac, say), so it never gets revoked.
+         try await context.signer.sign(
+             app: app,
+-            identity: .real(signingInfo.certificate, signingInfo.privateKey),
++            identity: signingInfo.privateKey.data.isEmpty ? .adhoc : .real(signingInfo.certificate, signingInfo.privateKey),
+             entitlementMapping: entitlements,
+             progress: progress
+         )
+diff --git a/Sources/XToolSupport/SDKBuilder.swift b/Sources/XToolSupport/SDKBuilder.swift
+index c0632c48a2a1fdce98271e05dd31aad12da20183..5ad987ce4a8890664446f154da5a14fb1e83dba3 100644
+--- a/Sources/XToolSupport/SDKBuilder.swift
++++ b/Sources/XToolSupport/SDKBuilder.swift
+@@ -111,10 +111,11 @@ struct SDKBuilder {
+         func sdk(platform: String, prefix: String) throws -> String {
+             let regex = try NSRegularExpression(pattern: #"^\#(prefix)\d+\.\d+\.sdk$"#)
+             let dir = dev.appendingPathComponent("Platforms/\(platform).platform/Developer/SDKs")
+-            let names = try dir.contents().map(\.lastPathComponent)
+-            guard let name = names.first(where: {
++            let names = try dir.contents().map(\.lastPathComponent).filter {
+                 regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil
+-            }) else {
++            }
++            let version = { (name: String) in name.dropFirst(prefix.count).dropLast(4).split(separator: ".").compactMap { Int($0) } }
++            guard let name = names.max(by: { version($0).lexicographicallyPrecedes(version($1)) }) else {
+                 throw Console.Error("Could not find SDK for \(platform)/\(prefix)")
+             }
+             return name
+diff --git a/Sources/XToolSupport/SignCommand.swift b/Sources/XToolSupport/SignCommand.swift
+new file mode 100644
+index 0000000000000000000000000000000000000000..3545a47fbf008e1dbdefe6ea0818a6da491ad340
+--- /dev/null
++++ b/Sources/XToolSupport/SignCommand.swift
+@@ -0,0 +1,36 @@
++import Foundation
++import XKit
++import ArgumentParser
++
++struct SignCommand: AsyncParsableCommand {
++    static let configuration = CommandConfiguration(
++        commandName: "sign",
++        abstract: "Provision an app for your team and sign it in place, without installing it",
++        discussion: """
++        Embeds the team's provisioning profiles, and signs with the stored certificate, or ad hoc when that \
++        certificate is stored without its key, so whoever holds the key can sign for real. It never revokes \
++        a certificate to make its own.
++        """
++    )
++
++    @Argument(
++        help: "The path to a built .app, whose entitlements are the ones it was signed with"
++    ) var path: String
++
++    func run() async throws {
++        let token = try AuthToken.saved()
++        let installer = IntegratedInstaller(
++            auth: token.authData(),
++            delegate: XToolInstallerDelegate(revokesCertificates: false)
++        )
++        do {
++            defer { print() }
++            try await installer.signInPlace(app: URL(fileURLWithPath: path))
++        } catch let error as CancellationError {
++            throw error
++        } catch {
++            print("Error: \(error)")
++            throw ExitCode.failure
++        }
++    }
++}
+diff --git a/Sources/XToolSupport/XTool.swift b/Sources/XToolSupport/XTool.swift
+index 2cec336e835026906d506ed600bb684375dd981b..1c0d85983582e9bb72e84e2e037f39a19443dff2 100644
+--- a/Sources/XToolSupport/XTool.swift
++++ b/Sources/XToolSupport/XTool.swift
+@@ -30,6 +30,7 @@ private struct XToolCommand: AsyncParsableCommand {
+                     NewCommand.self,
+                     DevCommand.self,
+                     DSCommand.self,
++                    SignCommand.self,
+                 ]
+             ),
+             CommandGroup(
+diff --git a/Sources/XToolSupport/XToolInstallerDelegate.swift b/Sources/XToolSupport/XToolInstallerDelegate.swift
+index 1c5bcc5b9d23162eb38d1f1fdb62977268b01053..fba8c24e1a3f3aaee1a55ed93b56d3a272f34646 100644
+--- a/Sources/XToolSupport/XToolInstallerDelegate.swift
++++ b/Sources/XToolSupport/XToolInstallerDelegate.swift
+@@ -9,7 +9,11 @@ final class XToolAuthDelegate: TwoFactorAuthDelegate {
+ }
+ 
+ actor XToolInstallerDelegate: IntegratedInstallerDelegate {
+-    init() {}
++    private let revokesCertificates: Bool
++
++    init(revokesCertificates: Bool = true) {
++        self.revokesCertificates = revokesCertificates
++    }
+ 
+     private let updateTask = LockIsolated<Task<Void, Never>?>(nil)
+ 
+@@ -79,6 +83,7 @@ actor XToolInstallerDelegate: IntegratedInstallerDelegate {
+     }
+ 
+     func confirmRevocation(of certificates: [DeveloperServicesCertificate]) async -> Bool {
++        guard revokesCertificates else { return false }
+         print("\nThe following certificates must be revoked:")
+         print(
+             certificates.map {

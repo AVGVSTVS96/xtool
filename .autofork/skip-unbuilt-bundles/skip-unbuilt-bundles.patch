@@ -1,8 +1,8 @@
 diff --git a/Sources/PackLib/Packer.swift b/Sources/PackLib/Packer.swift
-index bd2057b77edfbbe2bf47f8fefe7398cfafae9db1..db7e51e0cd25dc51b22e525b554a4c765066db88 100644
+index 6506fe7daa2535e03f2f1e3ab96483648c2dbf0f..9fe3d43d283ff13a83fa3d2aaf017bc494aad0b4 100644
 --- a/Sources/PackLib/Packer.swift
 +++ b/Sources/PackLib/Packer.swift
-@@ -156,7 +156,11 @@ public struct Packer: Sendable {
+@@ -163,7 +163,11 @@ public struct Packer: Sendable {
              group.addTask {
                  switch command {
                  case .bundle(let package, let target):
