@@ -30,9 +30,7 @@ public struct DeveloperServicesFetchProfileOperation: DeveloperServicesOperation
     public func perform() async throws -> Mobileprovision {
         let bundleIDs = try await context.developerAPIClient
             .bundleIdsGetCollection(query: .init(
-                filter_lbrack_identifier_rbrack_: [bundleID],
-                fields_lbrack_profiles_rbrack_: [.bundleId],
-                include: [.profiles]
+                filter_lbrack_identifier_rbrack_: [bundleID]
             ))
             .ok.body.json
 
@@ -49,16 +47,14 @@ public struct DeveloperServicesFetchProfileOperation: DeveloperServicesOperation
             throw Errors.tooManyMatchingBundleIDs
         }
 
-        let profiles = bundleID.relationships?.profiles?.data ?? []
-        switch profiles.count {
-        case 0:
-            // we're good
-            break
-        case 1:
-            _ = try await context.developerAPIClient.profilesDeleteInstance(path: .init(id: profiles[0].id)).noContent
-        default:
-            // if the user has >1 profile, it's probably okay to add another one (acceptable for non-free accounts?)
-            break
+        // Apple refuses a second profile with a name (409), and the bundle ID's own list of profiles
+        // can leave out one that went invalid, so the name is looked up and cleared directly.
+        let name = "XTL profile \(bundleID.id)"
+        let taken = try await context.developerAPIClient
+            .profilesGetCollection(query: .init(filter_lbrack_name_rbrack_: [name], fields_lbrack_profiles_rbrack_: [.name]))
+            .ok.body.json.data
+        for profile in taken where profile.attributes?.name == name {
+            _ = try await context.developerAPIClient.profilesDeleteInstance(path: .init(id: profile.id)).noContent
         }
 
         // Match locally rather than with filter[serialNumber]: the API lists serials with a
@@ -82,7 +78,7 @@ public struct DeveloperServicesFetchProfileOperation: DeveloperServicesOperation
                     data: .init(
                         _type: .profiles,
                         attributes: .init(
-                            name: "XTL profile \(bundleID.id)",
+                            name: name,
                             profileType: .init(.iosAppDevelopment)
                         ),
                         relationships: .init(
